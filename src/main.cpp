@@ -5,6 +5,8 @@
 #include <Adafruit_AHRS.h>
 #include <Adafruit_Sensor_Calibration.h>
 
+//this is a test
+
 // -------------------------- Configuration -------------------------- //
 
 #define MQTT_PUBLISH_FREQ_HZ		5
