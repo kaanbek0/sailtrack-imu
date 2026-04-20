@@ -3,7 +3,7 @@
 
 
 CAN_IMU_Frame imu_X, imu_Y, imu_Z;
-bool newX = false, newY = false, newZ = false;
+
 
 void setup() {
   Serial.begin(115200); 
@@ -20,28 +20,24 @@ void loop() {
 
   if (packetSize > 0) {
     long id = CAN.packetId();
-    uint8_t *ptr = nullptr;
 
-    // 1. Just store the data, DON'T print here.
-    if (id == ID_X) { ptr = (uint8_t *)&imu_X; newX = true; }
-    else if (id == ID_Y) { ptr = (uint8_t *)&imu_Y; newY = true; }
-    else if (id == ID_Z) { ptr = (uint8_t *)&imu_Z; newZ = true; }
-
-    if (ptr != nullptr) {
-      for (int i = 0; i < packetSize; i++) {
-        if (CAN.available()) ptr[i] = CAN.read();
-      }
+    switch (id)
+    {
+    case ID_IMU_X:
+        CAN.readBytes((uint8_t *)&imu_X, sizeof(imu_X));
+        break;
+    case ID_IMU_Y:
+        CAN.readBytes((uint8_t *)&imu_Y, sizeof(imu_Y));
+        break;
+    case ID_IMU_Z:
+        CAN.readBytes((uint8_t *)&imu_Z, sizeof(imu_Z));
+        Serial.printf("[IMU] Roll: %.2f | Pitch: %.2f | Yaw: %.2f\n", imu_X.v1, imu_Y.v1, imu_Z.v1);
+        break;
+    
+    default:
+        Serial.printf("Unknown ID: 0x%03X received\n", id);
+        break;
     }
-
-    // 2. Only print once we have a complete set (all 3 IDs)
-    if (newX && newY && newZ) {
-      Serial.println("--- Full IMU Update ---");
-      Serial.printf("X: %.2f | %.2f\n", imu_X.v1, imu_X.v2);
-      Serial.printf("Y: %.2f | %.2f\n", imu_Y.v1, imu_Y.v2);
-      Serial.printf("Z: %.2f | %.2f\n", imu_Z.v1, imu_Z.v2);
-      
-      // Reset flags for the next set
-      newX = newY = newZ = false;
-    }
+    
   }
 }

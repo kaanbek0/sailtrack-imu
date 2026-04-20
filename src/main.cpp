@@ -93,11 +93,11 @@ void loop() {
 	{
 		lastSendTime = millis();
 
-		Send_CAN_Frame(ID_X, filter.getRoll(), linearAccelX);
+		Send_CAN_Frame(ID_IMU_X, filter.getRoll(), linearAccelX);
 		delayMicroseconds(500);
-		Send_CAN_Frame(ID_Y, filter.getPitch(), linearAccelY);
+		Send_CAN_Frame(ID_IMU_Y, filter.getPitch(), linearAccelY);
 		delayMicroseconds(500);
-		Send_CAN_Frame(ID_Z, filter.getYaw(), linearAccelZ);
+		Send_CAN_Frame(ID_IMU_Z, filter.getYaw(), linearAccelZ);
 	}
 
 

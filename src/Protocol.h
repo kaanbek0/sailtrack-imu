@@ -7,10 +7,13 @@ struct CAN_IMU_Frame
     float v2;
 };
 
-enum CAN_IMU_ID{
-    ID_X = 0x01,
-    ID_Y = 0x02,
-    ID_Z = 0x03
+
+
+enum CAN_ID{
+    ID_IMU_X = 0x101,
+    ID_IMU_Y = 0x102,
+    ID_IMU_Z = 0x103,
+    ID_GPS_ = 0x20
 
 };
 
