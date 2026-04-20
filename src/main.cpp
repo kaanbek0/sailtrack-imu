@@ -1,71 +1,42 @@
 #include <Arduino.h>
 #include <SPI.h>
-#include <SailtrackModule.h>
 #include <Adafruit_LSM9DS1.h>
 #include <Adafruit_AHRS.h>
 #include <Adafruit_Sensor_Calibration.h>
+#include <CAN.h>
+#include "Protocol.h"
 
 //this is a test
 
-// -------------------------- Configuration -------------------------- //
-
-#define MQTT_PUBLISH_FREQ_HZ		5
-#define AHRS_UPDATE_FREQ_HZ			5
-
-#define BATTERY_ADC_PIN 			35
-#define BATTERY_ADC_RESOLUTION 		4095
-#define BATTERY_ADC_REF_VOLTAGE 	1.1
-#define BATTERY_ESP32_REF_VOLTAGE	3.3
-#define BATTERY_NUM_READINGS 		32
-#define BATTERY_READING_DELAY_MS	20
+//definition for test env
+//#define DebugMode
 
 #define I2C_SDA_PIN 				27
 #define I2C_SCL_PIN 				25
 
-#define LOOP_TASK_INTERVAL_MS		5
-#define MQTT_TASK_INTERVAL_MS	 	1000 / MQTT_PUBLISH_FREQ_HZ
 
-// ------------------------------------------------------------------- //
 
-SailtrackModule stm;
+//IMU definitions
 Adafruit_LSM9DS1 lsm = Adafruit_LSM9DS1();
 Adafruit_NXPSensorFusion filter;
 Adafruit_Sensor_Calibration_EEPROM cal;
+
+//global data for output
 float eulerX, eulerY, eulerZ;
 float linearAccelX, linearAccelY, linearAccelZ;
 
-class ModuleCallbacks: public SailtrackModuleCallbacks {
-	void onStatusPublish(JsonObject status) {
-		JsonObject battery = status.createNestedObject("battery");
-		float avg = 0;
-		for (int i = 0; i < BATTERY_NUM_READINGS; i++) {
-			avg += analogRead(BATTERY_ADC_PIN) / BATTERY_NUM_READINGS;
-			delay(BATTERY_READING_DELAY_MS);
-		}
-		battery["voltage"] = 2 * avg / BATTERY_ADC_RESOLUTION * BATTERY_ESP32_REF_VOLTAGE * BATTERY_ADC_REF_VOLTAGE;
-	}
-};
-
-void mqttTask(void * pvArguments) {
-	TickType_t lastWakeTime = xTaskGetTickCount();
-	while (true) {
-		StaticJsonDocument<STM_JSON_DOCUMENT_MEDIUM_SIZE> doc;
-
-		JsonObject euler = doc.createNestedObject("euler");
-		euler["x"] = eulerX;
-		euler["y"] = eulerY;
-		euler["z"] = eulerZ;
-
-		JsonObject linearAccel = doc.createNestedObject("linearAccel");
-		linearAccel["x"] = linearAccelX;
-		linearAccel["y"] = linearAccelY;
-		linearAccel["z"] = linearAccelZ;
-
-		stm.publish("sensor/imu0", doc.as<JsonObjectConst>());
-
-		vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(MQTT_TASK_INTERVAL_MS));
-	}
+//message stuctures
+void Send_CAN_Frame(uint32_t ID, float v1, float v2)
+{
+	CAN_IMU_Frame msg = {v1,v2};
+	CAN.beginPacket(ID);
+	CAN.write((uint8_t *)&msg, sizeof(msg));
+	CAN.endPacket();
 }
+
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 100;
+
 
 void beginIMU() {
 	Wire.setPins(I2C_SDA_PIN, I2C_SCL_PIN);
@@ -78,18 +49,19 @@ void beginIMU() {
 void beginAHRS() {
 	cal.begin();
 	cal.loadCalibration();
-	filter.begin(AHRS_UPDATE_FREQ_HZ);
+	filter.begin(5);
 }
 
 void setup() {
-	stm.begin("imu", IPAddress(192, 168, 42, 102), new ModuleCallbacks());
+	Serial.begin(115200);
 	beginIMU();
 	beginAHRS();
-	xTaskCreate(mqttTask, "mqttTask", STM_TASK_MEDIUM_STACK_SIZE, NULL, STM_TASK_MEDIUM_PRIORITY, NULL);
+	CAN.begin(500E3); 
 }
 
 void loop() {
-	TickType_t lastWakeTime = xTaskGetTickCount();
+
+	//IMU data
 	sensors_event_t accelEvent, gyroEvent, magEvent, tempEvent;
 
 	lsm.getEvent(&accelEvent, &magEvent, &gyroEvent, &tempEvent); 
@@ -116,5 +88,28 @@ void loop() {
 
 	filter.getLinearAcceleration(&linearAccelX, &linearAccelY, &linearAccelZ); 
 
-	vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(LOOP_TASK_INTERVAL_MS));
+	// Sending the messages
+	if(millis()-lastSendTime >= sendInterval)
+	{
+		lastSendTime = millis();
+
+		Send_CAN_Frame(ID_X, filter.getRoll(), linearAccelX);
+		delayMicroseconds(500);
+		Send_CAN_Frame(ID_Y, filter.getPitch(), linearAccelY);
+		delayMicroseconds(500);
+		Send_CAN_Frame(ID_Z, filter.getYaw(), linearAccelZ);
+	}
+
+
+	#ifdef DebugMode
+	//output for debuging
+	Serial.print("Roll: ");
+	Serial.println(eulerX);
+	Serial.print("Pitch: ");
+	Serial.println(eulerY);
+	Serial.print("Yaw: ");
+	Serial.println(eulerZ);
+	Serial.println();
+	#endif
+
 }
