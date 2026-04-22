@@ -4,9 +4,10 @@
 #include <Adafruit_AHRS.h>
 #include <Adafruit_Sensor_Calibration.h>
 #include <CAN.h>
+#include <TinyGPS++.h>
 #include "Protocol.h"
 
-//this is a test
+
 
 //definition for test env
 //#define DebugMode
@@ -14,6 +15,14 @@
 #define I2C_SDA_PIN 				27
 #define I2C_SCL_PIN 				25
 
+// The Neo-M8N default is 9600 baud
+#define GPS_BAUD 9600
+
+// Create the TinyGPS++ object
+TinyGPSPlus gps;
+
+// Use ESP32 Hardware Serial 2
+HardwareSerial SerialGPS(2);
 
 
 //IMU definitions
@@ -25,8 +34,8 @@ Adafruit_Sensor_Calibration_EEPROM cal;
 float eulerX, eulerY, eulerZ;
 float linearAccelX, linearAccelY, linearAccelZ;
 
-//message stuctures
-void Send_CAN_Frame(uint32_t ID, float v1, float v2)
+//message sending function
+void Send_CAN_IMU(uint32_t ID, float v1, float v2)
 {
 	CAN_IMU_Frame msg = {v1,v2};
 	CAN.beginPacket(ID);
@@ -34,6 +43,32 @@ void Send_CAN_Frame(uint32_t ID, float v1, float v2)
 	CAN.endPacket();
 }
 
+void Send_CAN_GPS_POS(uint32_t ID, uint32_t v1, uint32_t v2)
+{
+	CAN_GPS_POS msg = {v1,v2};
+	CAN.beginPacket(ID);
+	CAN.write((uint8_t *)&msg, sizeof(msg));
+	CAN.endPacket();
+}
+
+void Send_CAN_GPS_MOT(uint32_t ID, float v1, float v2)
+{
+	CAN_GPS_MOTION msg = {v1,v2};
+	CAN.beginPacket(ID);
+	CAN.write((uint8_t *)&msg, sizeof(msg));
+	CAN.endPacket();
+}
+
+void Send_CAN_GPS_INFO(uint32_t ID, uint32_t v1, uint8_t v2)
+{
+	CAN_GPS_INFO msg = {v1,v2};
+	CAN.beginPacket(ID);
+	CAN.write((uint8_t *)&msg, sizeof(msg));
+	CAN.endPacket();
+}
+
+
+//message sending timer
 unsigned long lastSendTime = 0;
 const unsigned long sendInterval = 100;
 
@@ -57,6 +92,9 @@ void setup() {
 	beginIMU();
 	beginAHRS();
 	CAN.begin(500E3); 
+
+	// Initialize GPS Serial
+	SerialGPS.begin(GPS_BAUD, SERIAL_8N1, 16, 17);
 }
 
 void loop() {
@@ -88,28 +126,56 @@ void loop() {
 
 	filter.getLinearAcceleration(&linearAccelX, &linearAccelY, &linearAccelZ); 
 
+	//reading data from the gps
+	while (SerialGPS.available() > 0) {
+    gps.encode(SerialGPS.read());
+	}
+
 	// Sending the messages
+	#ifndef DebugMode
 	if(millis()-lastSendTime >= sendInterval)
 	{
 		lastSendTime = millis();
 
-		Send_CAN_Frame(ID_IMU_X, filter.getRoll(), linearAccelX);
+		Send_CAN_IMU(ID_IMU_X, filter.getRoll(), linearAccelX);
 		delayMicroseconds(500);
-		Send_CAN_Frame(ID_IMU_Y, filter.getPitch(), linearAccelY);
+		Send_CAN_IMU(ID_IMU_Y, filter.getPitch(), linearAccelY);
 		delayMicroseconds(500);
-		Send_CAN_Frame(ID_IMU_Z, filter.getYaw(), linearAccelZ);
+		Send_CAN_IMU(ID_IMU_Z, filter.getYaw(), linearAccelZ);
+		delayMicroseconds(500);
+		Send_CAN_GPS_POS(ID_GPS_POS, gps.location.rawLat().billionths, gps.location.rawLng().billionths);
+		delayMicroseconds(500);
+		Send_CAN_GPS_MOT(ID_GPS_MOTION, gps.speed.kmph(), gps.course.deg());
+		delayMicroseconds(500);
+		Send_CAN_GPS_INFO(ID_GPS_INFO, gps.time.value(), gps.satellites.value());
 	}
+	#endif
 
 
 	#ifdef DebugMode
+	static unsigned long lastPrint = 0;
+  	if (millis() - lastPrint > 2000) {
+    lastPrint = millis();
 	//output for debuging
-	Serial.print("Roll: ");
-	Serial.println(eulerX);
-	Serial.print("Pitch: ");
-	Serial.println(eulerY);
-	Serial.print("Yaw: ");
-	Serial.println(eulerZ);
-	Serial.println();
+	Serial.printf("[IMU] Roll: %.2f | Pitch: %.2f | Yaw: %.2f\n", filter.getRoll(), filter.getPitch(), filter.getYaw());
+	Serial.print("[GPS] Sats: "); Serial.print(gps.satellites.value());
+    
+    if (gps.location.isValid()) {
+      Serial.print(" | LAT: "); Serial.print(gps.location.lat(), 6);
+      Serial.print(" | LON: "); Serial.print(gps.location.lng(), 6);
+      Serial.print(" | Speed (km/h): "); Serial.print(gps.speed.kmph());
+      Serial.print(" | Time: "); Serial.print(gps.time.value()); // Similar to epoch
+    } else {
+      Serial.print(" | Waiting for FIX...");
+    }
+    
+    Serial.println();
+
+    // If you haven't received ANY data after 5 seconds, check wiring
+    if (millis() > 5000 && gps.charsProcessed() < 10) {
+      Serial.println("WARNING: No data from GPS. Check TX/RX wiring!");
+    }
+	}
 	#endif
 
 }
