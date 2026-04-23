@@ -1,181 +1,208 @@
 #include <Arduino.h>
 #include <SPI.h>
+#include <Wire.h>
 #include <Adafruit_LSM9DS1.h>
 #include <Adafruit_AHRS.h>
 #include <Adafruit_Sensor_Calibration.h>
 #include <CAN.h>
 #include <TinyGPS++.h>
+#include <esp_task_wdt.h> 
 #include "Protocol.h"
 
-
-
-//definition for test env
-//#define DebugMode
-
-#define I2C_SDA_PIN 				27
-#define I2C_SCL_PIN 				25
-
-// The Neo-M8N default is 9600 baud
+// --- Configuration ---
+#define LED_PIN 2 
+#define I2C_SDA_PIN 27
+#define I2C_SCL_PIN 25
 #define GPS_BAUD 9600
+#define RECOVERY_INTERVAL 10000 // 10 seconds
 
-// Create the TinyGPS++ object
+// --- Global Objects ---
 TinyGPSPlus gps;
-
-// Use ESP32 Hardware Serial 2
 HardwareSerial SerialGPS(2);
-
-
-//IMU definitions
 Adafruit_LSM9DS1 lsm = Adafruit_LSM9DS1();
 Adafruit_NXPSensorFusion filter;
 Adafruit_Sensor_Calibration_EEPROM cal;
 
-//global data for output
-float eulerX, eulerY, eulerZ;
+// --- State Variables ---
+bool imuFound = false;
+bool canFound = false;
+bool gpsFound = false;
+unsigned long lastHeartbeat = 0;
+bool ledState = LOW;
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 500;
+unsigned long lastRecoveryAttempt = 0;
+
 float linearAccelX, linearAccelY, linearAccelZ;
 
-//message sending function
-void Send_CAN_IMU(uint32_t ID, float v1, float v2)
-{
-	CAN_IMU_Frame msg = {v1,v2};
-	CAN.beginPacket(ID);
-	CAN.write((uint8_t *)&msg, sizeof(msg));
-	CAN.endPacket();
+// --- CAN Helper Functions ---
+void Send_CAN_IMU(uint32_t ID, float v1, float v2) {
+    if (!canFound) return;
+    CAN_IMU_Frame msg = {v1, v2};
+    CAN.beginPacket(ID);
+    CAN.write((uint8_t *)&msg, sizeof(msg));
+    CAN.endPacket();
 }
 
-void Send_CAN_GPS_POS(uint32_t ID, uint32_t v1, uint32_t v2)
-{
-	CAN_GPS_POS msg = {v1,v2};
-	CAN.beginPacket(ID);
-	CAN.write((uint8_t *)&msg, sizeof(msg));
-	CAN.endPacket();
+void Send_CAN_GPS_POS(uint32_t ID, int32_t v1, int32_t v2) {
+    if (!canFound) return;
+    CAN_GPS_POS msg = {v1, v2};
+    CAN.beginPacket(ID);
+    CAN.write((uint8_t *)&msg, sizeof(msg));
+    CAN.endPacket();
 }
 
-void Send_CAN_GPS_MOT(uint32_t ID, float v1, float v2)
-{
-	CAN_GPS_MOTION msg = {v1,v2};
-	CAN.beginPacket(ID);
-	CAN.write((uint8_t *)&msg, sizeof(msg));
-	CAN.endPacket();
+void Send_CAN_GPS_MOT(uint32_t ID, float v1, float v2) {
+    if (!canFound) return;
+    CAN_GPS_MOTION msg = {v1, v2};
+    CAN.beginPacket(ID);
+    CAN.write((uint8_t *)&msg, sizeof(msg));
+    CAN.endPacket();
 }
 
-void Send_CAN_GPS_INFO(uint32_t ID, uint32_t v1, uint8_t v2)
-{
-	CAN_GPS_INFO msg = {v1,v2};
-	CAN.beginPacket(ID);
-	CAN.write((uint8_t *)&msg, sizeof(msg));
-	CAN.endPacket();
+void Send_CAN_GPS_INFO(uint32_t ID, uint32_t v1, uint8_t v2) {
+    if (!canFound) return;
+    CAN_GPS_INFO msg = {v1, v2};
+    CAN.beginPacket(ID);
+    CAN.write((uint8_t *)&msg, sizeof(msg));
+    CAN.endPacket();
 }
 
+// --- Recovery Logic ---
+void attemptModuleRecovery() {
+    if (millis() - lastRecoveryAttempt < RECOVERY_INTERVAL) return;
+    lastRecoveryAttempt = millis();
 
-//message sending timer
-unsigned long lastSendTime = 0;
-const unsigned long sendInterval = 100;
+    if (!imuFound) {
+        Serial.println("[RECOVERY] Trying IMU...");
+        Wire.end(); 
+        Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+        Wire.setTimeOut(50);
+        if (lsm.begin()) {
+            lsm.setupAccel(lsm.LSM9DS1_ACCELRANGE_2G);
+            lsm.setupMag(lsm.LSM9DS1_MAGGAIN_4GAUSS);
+            lsm.setupGyro(lsm.LSM9DS1_GYROSCALE_245DPS);
+            imuFound = true;
+            Serial.println("[RECOVERY] IMU Success!");
+        }
+    }
 
+    if (!canFound) {
+        Serial.println("[RECOVERY] Trying CAN...");
+        CAN.end();
+        if (CAN.begin(500E3)) {
+            canFound = true;
+            Serial.println("[RECOVERY] CAN Success!");
+        }
+    }
 
-void beginIMU() {
-	Wire.setPins(I2C_SDA_PIN, I2C_SCL_PIN);
-	lsm.begin();
-	lsm.setupAccel(lsm.LSM9DS1_ACCELRANGE_2G);
-  	lsm.setupMag(lsm.LSM9DS1_MAGGAIN_4GAUSS);
-  	lsm.setupGyro(lsm.LSM9DS1_GYROSCALE_245DPS);
-}
-
-void beginAHRS() {
-	cal.begin();
-	cal.loadCalibration();
-	filter.begin(5);
+    if (!gpsFound) {
+        if (SerialGPS.available() > 0) {
+            gpsFound = true;
+            Serial.println("[RECOVERY] GPS Success!");
+        }
+    }
 }
 
 void setup() {
-	Serial.begin(115200);
-	beginIMU();
-	beginAHRS();
-	CAN.begin(500E3); 
+    Serial.begin(115200);
+    pinMode(LED_PIN, OUTPUT);
 
-	// Initialize GPS Serial
-	SerialGPS.begin(GPS_BAUD, SERIAL_8N1, 16, 17);
+    // 1. Classic Watchdog Setup (5 seconds)
+    esp_task_wdt_init(5, true); 
+    esp_task_wdt_add(NULL);
+
+    // 2. I2C Setup
+    Wire.setPins(I2C_SDA_PIN, I2C_SCL_PIN);
+    Wire.begin();
+    Wire.setTimeOut(50);
+
+    // 3. Sensor Init
+    Serial.print("IMU Init... ");
+    if (lsm.begin()) {
+        lsm.setupAccel(lsm.LSM9DS1_ACCELRANGE_2G);
+        lsm.setupMag(lsm.LSM9DS1_MAGGAIN_4GAUSS);
+        lsm.setupGyro(lsm.LSM9DS1_GYROSCALE_245DPS);
+        imuFound = true;
+        Serial.println("OK");
+    } else { Serial.println("FAIL"); }
+
+    Serial.print("CAN Init... ");
+    if (CAN.begin(500E3)) {
+        canFound = true;
+        Serial.println("OK");
+    } else { Serial.println("FAIL"); }
+
+    cal.begin();
+    cal.loadCalibration();
+    filter.begin(10); // 10Hz filter
+
+    SerialGPS.begin(GPS_BAUD, SERIAL_8N1, 16, 17);
+    
+    // Boot Indicator
+    for(int i=0; i<3; i++) {
+        digitalWrite(LED_PIN, HIGH); delay(100);
+        digitalWrite(LED_PIN, LOW);  delay(100);
+    }
 }
 
 void loop() {
+    esp_task_wdt_reset(); // Feed the dog
 
-	//IMU data
-	sensors_event_t accelEvent, gyroEvent, magEvent, tempEvent;
-
-	lsm.getEvent(&accelEvent, &magEvent, &gyroEvent, &tempEvent); 
-
-	cal.calibrate(accelEvent);
-	cal.calibrate(gyroEvent);
-	cal.calibrate(magEvent);
-
-	float gx, gy, gz;
-	gx = gyroEvent.gyro.x * SENSORS_RADS_TO_DPS;
-	gy = gyroEvent.gyro.y * SENSORS_RADS_TO_DPS;
-	gz = gyroEvent.gyro.z * SENSORS_RADS_TO_DPS;
-
-	float ax, ay, az;
-	ax = accelEvent.acceleration.x / SENSORS_GRAVITY_STANDARD;
-	ay = accelEvent.acceleration.y / SENSORS_GRAVITY_STANDARD;
-	az = accelEvent.acceleration.z / SENSORS_GRAVITY_STANDARD;
-
-	filter.update(gx, gy, gz, ax, ay, az, magEvent.magnetic.x, magEvent.magnetic.y, magEvent.magnetic.z);
-
-	eulerX = filter.getRoll();
-	eulerY = filter.getPitch();
-	eulerZ = filter.getYaw();
-
-	filter.getLinearAcceleration(&linearAccelX, &linearAccelY, &linearAccelZ); 
-
-	//reading data from the gps
-	while (SerialGPS.available() > 0) {
-    gps.encode(SerialGPS.read());
-	}
-
-	// Sending the messages
-	#ifndef DebugMode
-	if(millis()-lastSendTime >= sendInterval)
-	{
-		lastSendTime = millis();
-
-		Send_CAN_IMU(ID_IMU_X, filter.getRoll(), linearAccelX);
-		delayMicroseconds(500);
-		Send_CAN_IMU(ID_IMU_Y, filter.getPitch(), linearAccelY);
-		delayMicroseconds(500);
-		Send_CAN_IMU(ID_IMU_Z, filter.getYaw(), linearAccelZ);
-		delayMicroseconds(500);
-		Send_CAN_GPS_POS(ID_GPS_POS, gps.location.rawLat().billionths, gps.location.rawLng().billionths);
-		delayMicroseconds(500);
-		Send_CAN_GPS_MOT(ID_GPS_MOTION, gps.speed.kmph(), gps.course.deg());
-		delayMicroseconds(500);
-		Send_CAN_GPS_INFO(ID_GPS_INFO, gps.time.value(), gps.satellites.value());
-	}
-	#endif
-
-
-	#ifdef DebugMode
-	static unsigned long lastPrint = 0;
-  	if (millis() - lastPrint > 2000) {
-    lastPrint = millis();
-	//output for debuging
-	Serial.printf("[IMU] Roll: %.2f | Pitch: %.2f | Yaw: %.2f\n", filter.getRoll(), filter.getPitch(), filter.getYaw());
-	Serial.print("[GPS] Sats: "); Serial.print(gps.satellites.value());
-    
-    if (gps.location.isValid()) {
-      Serial.print(" | LAT: "); Serial.print(gps.location.lat(), 6);
-      Serial.print(" | LON: "); Serial.print(gps.location.lng(), 6);
-      Serial.print(" | Speed (km/h): "); Serial.print(gps.speed.kmph());
-      Serial.print(" | Time: "); Serial.print(gps.time.value()); // Similar to epoch
-    } else {
-      Serial.print(" | Waiting for FIX...");
+    // 1. Heartbeat
+    if (millis() - lastHeartbeat >= 500) {
+        lastHeartbeat = millis();
+        ledState = !ledState;
+        digitalWrite(LED_PIN, ledState);
     }
-    
-    Serial.println();
 
-    // If you haven't received ANY data after 5 seconds, check wiring
-    if (millis() > 5000 && gps.charsProcessed() < 10) {
-      Serial.println("WARNING: No data from GPS. Check TX/RX wiring!");
+    // 2. Run Recovery Medic
+    attemptModuleRecovery();
+
+    // 3. Process IMU
+    if (imuFound) {
+        sensors_event_t a, m, g, t;
+        if (lsm.getEvent(&a, &m, &g, &t)) {
+            filter.update(g.gyro.x * SENSORS_RADS_TO_DPS, g.gyro.y * SENSORS_RADS_TO_DPS, g.gyro.z * SENSORS_RADS_TO_DPS,
+                          a.acceleration.x, a.acceleration.y, a.acceleration.z,
+                          m.magnetic.x, m.magnetic.y, m.magnetic.z);
+            filter.getLinearAcceleration(&linearAccelX, &linearAccelY, &linearAccelZ);
+        } else {
+            imuFound = false; // Mark for recovery
+        }
     }
-	}
-	#endif
 
+    // 4. Process GPS
+    while (SerialGPS.available() > 0) {
+        if (gps.encode(SerialGPS.read())) {
+            gpsFound = true;
+        }
+    }
+
+    // 5. Send Data
+    if (millis() - lastSendTime >= sendInterval) {
+        lastSendTime = millis();
+
+        if (canFound) {
+            if (imuFound) {
+                Send_CAN_IMU(ID_IMU_X, filter.getRoll(), linearAccelX);
+                delayMicroseconds(500);
+                Send_CAN_IMU(ID_IMU_Y, filter.getPitch(), linearAccelY);
+                delayMicroseconds(500);
+                Send_CAN_IMU(ID_IMU_Z, filter.getYaw(), linearAccelZ);
+                delayMicroseconds(500);
+            }
+
+            if (gpsFound) {
+                int32_t latFixed = (int32_t)(gps.location.lat() * 1000000);
+                int32_t lngFixed = (int32_t)(gps.location.lng() * 1000000);
+                
+                Send_CAN_GPS_POS(ID_GPS_POS, latFixed, lngFixed);
+                delayMicroseconds(500);
+                Send_CAN_GPS_MOT(ID_GPS_MOTION, gps.speed.kmph(), gps.course.deg());
+                delayMicroseconds(500);
+                Send_CAN_GPS_INFO(ID_GPS_INFO, gps.time.value(), (uint8_t)gps.satellites.value());
+            }
+        }
+    }
 }

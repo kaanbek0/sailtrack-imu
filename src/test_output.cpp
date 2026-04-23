@@ -36,12 +36,12 @@ void loop() {
         break;
     case ID_IMU_Z:
         CAN.readBytes((uint8_t *)&imu_Z, sizeof(imu_Z));
-        Serial.printf("[IMU] Roll: %.2f | Pitch: %.2f | Yaw: %.2f\n", imu_X.v1, imu_Y.v1, imu_Z.v1);
+        Serial.printf("[IMU] Roll: %.2f | Pitch: %.2f   | Yaw: %.2f\n", imu_X.v1, imu_Y.v1, imu_Z.v1);
         break;
     case ID_GPS_POS:{
         CAN.readBytes((uint8_t *)&gps_pos, sizeof(gps_pos));
-        lat = gps_pos.lat/ 10000000.0;
-        lng = gps_pos.lng/ 10000000.0;
+        lat = gps_pos.lat/ 1000000.0;
+        lng = gps_pos.lng/ 1000000.0;
         break;
     }
     case ID_GPS_MOTION:
@@ -49,7 +49,8 @@ void loop() {
         break;
     case ID_GPS_INFO:
         CAN.readBytes((uint8_t *)&gps_info, sizeof(gps_info));
-            Serial.printf("[GPS] Sat: %d  |Lat: %.6f  | Lng: %.6f\  | Headding: %f  | Time: %d\n",gps_info.sats, lat, lng, gps_mot.headMot, gps_info.time);
+            Serial.printf("[GPS] Sat: %d     |Lat: %.6f | Lng: %.6f | Headding: %.3f | Time: %d\n",gps_info.sats, gps_pos.lat/ 1000000.0, gps_pos.lng/ 1000000.0, gps_mot.headMot, gps_info.time);
+            Serial.println("__________________________________________________________________");
         break;
     default:
         Serial.printf("Unknown ID: 0x%03X received\n", id);
