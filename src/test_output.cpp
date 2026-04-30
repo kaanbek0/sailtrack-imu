@@ -14,10 +14,13 @@ void setup() {
   Serial.begin(115200); 
   while (!Serial);
 
+
   if (!CAN.begin(500E3)) {
     Serial.println("Starting CAN failed!");
     while (1);
   }
+    CAN.setPins(33,25);
+
 }
 
 void loop() {
