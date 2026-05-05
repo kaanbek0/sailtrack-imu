@@ -42,6 +42,7 @@ void Send_CAN_IMU(uint32_t ID, float v1, float v2) {
     CAN.beginPacket(ID);
     CAN.write((uint8_t *)&msg, sizeof(msg));
     CAN.endPacket();
+    Serial.printf("Imu data sent with data: %f | %f\n",v1,v2);
 }
 
 void Send_CAN_GPS_POS(uint32_t ID, int32_t v1, int32_t v2) {
@@ -50,6 +51,7 @@ void Send_CAN_GPS_POS(uint32_t ID, int32_t v1, int32_t v2) {
     CAN.beginPacket(ID);
     CAN.write((uint8_t *)&msg, sizeof(msg));
     CAN.endPacket();
+    Serial.printf("gps pos data sent with data: %d | %d\n",v1,v2);
 }
 
 void Send_CAN_GPS_MOT(uint32_t ID, float v1, float v2) {
@@ -58,6 +60,7 @@ void Send_CAN_GPS_MOT(uint32_t ID, float v1, float v2) {
     CAN.beginPacket(ID);
     CAN.write((uint8_t *)&msg, sizeof(msg));
     CAN.endPacket();
+    Serial.printf("gps mot data sent with data: %f | %f\n",v1,v2);
 }
 
 void Send_CAN_GPS_INFO(uint32_t ID, uint32_t v1, uint8_t v2) {
@@ -66,6 +69,7 @@ void Send_CAN_GPS_INFO(uint32_t ID, uint32_t v1, uint8_t v2) {
     CAN.beginPacket(ID);
     CAN.write((uint8_t *)&msg, sizeof(msg));
     CAN.endPacket();
+    Serial.printf("gps info data sent with data: %d | %d\n",v1,v2);
 }
 
 // --- Recovery Logic ---

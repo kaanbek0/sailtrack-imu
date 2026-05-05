@@ -5,7 +5,12 @@
 #include "Protocol.h"
 #include "images.h"
 
-// --- PINS (Preserved) ---
+// --- Professional Digital Font ---
+// This font is now used for BOTH labels and numbers
+#include <DSEG14Classic_Bold20pt7b.h> 
+#include <DSEG14Classic_Regular40pt7b.h>
+
+// --- PINS (Preserved Verbatim) ---
 #define EPD_CS    2
 #define EPD_DC    4
 #define EPD_RST   16
@@ -19,68 +24,78 @@
 
 GxEPD2_BW<GxEPD2_750_T7, GxEPD2_750_T7::HEIGHT> display(GxEPD2_750_T7(EPD_CS, EPD_DC, EPD_RST, EPD_BUSY));
 
-double current_lat = 0, current_lng = 0;
-float current_roll = 0;
+float current_sog = 0, current_yaw = 0, current_pth = 0, current_rll = 0;
 int refresh_count = 0;
 bool isAsleep = false;
 unsigned long bootTime = 0;
+
+// UI Helper: Draws 7-Segment vertical labels on the far left
+void drawVerticalLabel(int x, int y, const char* text) {
+    display.setFont(&DSEG14Classic_Bold20pt7b); 
+    display.setTextSize(1); // Smaller size for labels, still 7-segmented
+    for(int i = 0; i < strlen(text); i++) {
+        display.setCursor(x, y + (i * 40)); 
+        display.print(text[i]);
+    }
+}
+
+// UI Helper: Draws the huge 7-Segment numbers
+void drawBigValue(int x, int y, float val, int decimals) {
+    display.setFont(&DSEG14Classic_Regular40pt7b);
+    display.setTextSize(2); 
+    display.setCursor(x, y);
+    display.print(val, decimals);
+}
 
 void syncCAN() {
     while (CAN.parsePacket()) {
         long id = CAN.packetId();
         if (id == ID_IMU_X) {
-            CAN_IMU_Frame frame;
-            CAN.readBytes((uint8_t *)&frame, sizeof(frame));
-            current_roll = frame.v1;
+            CAN_IMU_Frame frame; CAN.readBytes((uint8_t *)&frame, sizeof(frame));
+            current_rll = frame.v1; // RLL[cite: 4]
         } 
-        else if (id == ID_GPS_POS) {
-            CAN_GPS_POS frame;
-            CAN.readBytes((uint8_t *)&frame, sizeof(frame));
-            current_lat = frame.lat / 1000000.0;
-            current_lng = frame.lng / 1000000.0;
+        else if (id == ID_IMU_Y) {
+            CAN_IMU_Frame frame; CAN.readBytes((uint8_t *)&frame, sizeof(frame));
+            current_pth = frame.v1; // PTH[cite: 4]
+        }
+        else if (id == ID_IMU_Z) {
+            CAN_IMU_Frame frame; CAN.readBytes((uint8_t *)&frame, sizeof(frame));
+            current_yaw = frame.v1; // DRF[cite: 4]
+        }
+        else if (id == ID_GPS_MOTION) {
+            CAN_GPS_MOTION frame; CAN.readBytes((uint8_t *)&frame, sizeof(frame));
+            current_sog = frame.kmph; // SOG[cite: 4]
         }
     }
 }
 
-// --- UPDATED: THE GOODBYE SEQUENCE ---
 void goToSleep() {
-    Serial.println("Starting Goodbye Sequence...");
-
-    // 1. SHOW LOGO (The Goodbye Screen)
     display.setRotation(1); 
     display.setFullWindow();
     display.firstPage();
     do {
         display.fillScreen(GxEPD_WHITE);
-        // Centered logo (X:140, Y:300)
-        display.drawBitmap(140, 300, epd_bitmap_metisvela, 200, 200, GxEPD_BLACK);
+        display.drawBitmap(140, 80, epd_bitmap_metisvela, 200, 200, GxEPD_BLACK); //
+        display.drawBitmap(121, 300, epd_bitmap_sailtrack_logo, 238, 175, GxEPD_BLACK); //
         
+        // --- BACK TO ORIGINAL FONT FOR SLEEP TEXT ---
+        display.setFont(); 
         display.setTextSize(3);
         display.setCursor(120, 550);
         display.print("SHUTTING DOWN");
     } while (display.nextPage());
 
-    // 2. PAUSE (Wait 3 seconds so you can see the boat)
     delay(3000);
-
-    // 3. THE FINAL CLEANSE (Wash to White to prevent ghosting)
-    Serial.println("Performing final white wash...");
     display.firstPage();
-    do {
-        display.fillScreen(GxEPD_WHITE);
-    } while (display.nextPage());
-
-    // 4. HARDWARE POWER DOWN
+    do { display.fillScreen(GxEPD_WHITE); } while (display.nextPage());
     display.hibernate();
     digitalWrite(EPD_PWR, LOW);
     isAsleep = true;
-    Serial.println("SYSTEM HIBERNATING. Safe to unplug.");
 }
 
 void setup() {
     Serial.begin(115200);
     bootTime = millis();
-    
     pinMode(EPD_PWR, OUTPUT);
     digitalWrite(EPD_PWR, HIGH); 
     pinMode(SLEEP_BUTTON, INPUT_PULLUP); 
@@ -89,13 +104,14 @@ void setup() {
     SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
     display.init(115200);
 
-    // Startup Logo
+    // Startup Sequence with Logos[cite: 3]
     display.setRotation(1); 
     display.setFullWindow();
     display.firstPage();
     do {
         display.fillScreen(GxEPD_WHITE);
-        display.drawBitmap(140, 300, epd_bitmap_metisvela, 200, 200, GxEPD_BLACK);
+        display.drawBitmap(140, 80, epd_bitmap_metisvela, 200, 200, GxEPD_BLACK);
+        display.drawBitmap(121, 300, epd_bitmap_sailtrack_logo, 238, 175, GxEPD_BLACK);
     } while (display.nextPage());
 
     CAN.setPins(CAN_RX_PIN, CAN_TX_PIN);
@@ -105,13 +121,8 @@ void setup() {
 
 void loop() {
     if (isAsleep) return;
-
-    // Safety: Ignore button for first 10s to avoid loop if shorted
-    if (millis() - bootTime > 10000) { 
-        if (digitalRead(SLEEP_BUTTON) == LOW) {
-            goToSleep();
-            return;
-        }
+    if (millis() - bootTime > 10000 && digitalRead(SLEEP_BUTTON) == LOW) {
+        goToSleep(); return;
     }
 
     syncCAN();
@@ -119,54 +130,37 @@ void loop() {
     static unsigned long lastRefresh = 0;
     if (millis() - lastRefresh >= 500) {
         lastRefresh = millis();
-
-        if (refresh_count >= 20) {
+        if (refresh_count >= 50) { 
             display.setFullWindow();
             display.firstPage();
             do { display.fillScreen(GxEPD_WHITE); } while (display.nextPage());
             refresh_count = 0;
         }
 
-        syncCAN();
-        double dLat = current_lat;
-        double dLng = current_lng;
-        float dRoll = current_roll;
-
-        display.setRotation(1); 
         display.setPartialWindow(0, 0, display.width(), display.height());
-
         display.firstPage();
         do {
             syncCAN();
             display.fillScreen(GxEPD_WHITE);
             display.setTextColor(GxEPD_BLACK);
 
-            // SECTION 1: LATITUDE
-            display.setTextSize(3);
-            display.setCursor(20, 30); display.print("LATITUDE"); 
-            display.setTextSize(6);
-            display.setCursor(20, 110); display.print(dLat, 6);
+            // --- SECTION 1: SOG ---
+            drawVerticalLabel(10, 60, "SOG"); 
+            drawBigValue(80, 160, current_sog, 1);
 
-            display.drawFastHLine(0, 210, 480, GxEPD_BLACK);
+            // --- SECTION 2: YAW ---
+            drawVerticalLabel(10, 260, "YAW");
+            drawBigValue(80, 360, current_yaw, 0);
 
-            // SECTION 2: LONGITUDE
-            display.setTextSize(3);
-            display.setCursor(20, 250); display.print("LONGITUDE");
-            display.setTextSize(6);
-            display.setCursor(20, 330); display.print(dLng, 6);
+            // --- SECTION 3: PTH ---
+            drawVerticalLabel(10, 460, "PTH");
+            drawBigValue(80, 560, current_pth, 1);
 
-            display.drawFastHLine(0, 430, 480, GxEPD_BLACK);
-
-            // SECTION 3: ROLL ANGLE
-            display.setTextSize(3);
-            display.setCursor(20, 470); display.print("ROLL ANGLE");
-            display.setTextSize(9); 
-            display.setCursor(60, 630); display.print(dRoll, 1);
-            display.setTextSize(4);
-            display.setCursor(280, 710); display.print("deg");
+            // --- SECTION 4: RLL ---
+            drawVerticalLabel(10, 660, "RLL");
+            drawBigValue(80, 760, current_rll, 1);
 
         } while (display.nextPage());
-
         refresh_count++;
     }
 }
