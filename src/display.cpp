@@ -40,9 +40,9 @@ void drawVerticalLabel(int x, int y, const char* text) {
 }
 
 // UI Helper: Draws the huge 7-Segment numbers
-void drawBigValue(int x, int y, float val, int decimals) {
+void drawBigValue(int x, int y, float val, int decimals,int size) {
     display.setFont(&DSEG14Classic_Regular40pt7b);
-    display.setTextSize(2); 
+    display.setTextSize(size); 
     display.setCursor(x, y);
     display.print(val, decimals);
 }
@@ -133,10 +133,30 @@ void loop() {
         if (refresh_count >= 50) { 
             display.setFullWindow();
             display.firstPage();
-            do { display.fillScreen(GxEPD_WHITE); } while (display.nextPage());
+            do { display.fillScreen(GxEPD_WHITE); 
+                
+            display.fillScreen(GxEPD_WHITE);
+            display.setTextColor(GxEPD_BLACK);
+
+            // --- SECTION 1: SOG ---
+            drawVerticalLabel(10, 60, "SOG"); 
+            drawBigValue(80, 160, current_sog, 1, 2);
+
+            // --- SECTION 2: YAW ---
+            drawVerticalLabel(10, 260, "YAW");
+            drawBigValue(80, 360, current_yaw, 0,2);
+
+            // --- SECTION 3: PTH ---
+            drawVerticalLabel(10, 460, "PTH");
+            drawBigValue(80, 560, current_pth, 1,2);
+
+            // --- SECTION 4: RLL ---
+            drawVerticalLabel(10, 660, "RLL");
+            drawBigValue(80, 760, current_rll, 1,2);
+            } while (display.nextPage());
             refresh_count = 0;
         }
-
+        else{
         display.setPartialWindow(0, 0, display.width(), display.height());
         display.firstPage();
         do {
@@ -146,21 +166,22 @@ void loop() {
 
             // --- SECTION 1: SOG ---
             drawVerticalLabel(10, 60, "SOG"); 
-            drawBigValue(80, 160, current_sog, 1);
+            drawBigValue(80, 160, current_sog, 1, 2);
 
             // --- SECTION 2: YAW ---
             drawVerticalLabel(10, 260, "YAW");
-            drawBigValue(80, 360, current_yaw, 0);
+            drawBigValue(80, 360, current_yaw, 0,2);
 
             // --- SECTION 3: PTH ---
             drawVerticalLabel(10, 460, "PTH");
-            drawBigValue(80, 560, current_pth, 1);
+            drawBigValue(80, 560, current_pth, 1,2);
 
             // --- SECTION 4: RLL ---
             drawVerticalLabel(10, 660, "RLL");
-            drawBigValue(80, 760, current_rll, 1);
+            drawBigValue(80, 760, current_rll, 1,2);
 
         } while (display.nextPage());
+        }
         refresh_count++;
     }
 }
