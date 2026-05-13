@@ -35,7 +35,7 @@ unsigned long lastRecoveryAttempt = 0;
 
 float linearAccelX, linearAccelY, linearAccelZ;
 
-// --- CAN Helper Functions ---
+// --- CAN Sending Functions ---
 void Send_CAN_IMU(uint32_t ID, float v1, float v2) {
     if (!canFound) return;
     CAN_IMU_Frame msg = {v1, v2};
@@ -112,16 +112,16 @@ void setup() {
     Serial.begin(115200);
     pinMode(LED_PIN, OUTPUT);
 
-    // 1. Classic Watchdog Setup (5 seconds)
+    // Classic Watchdog Setup (for recovery)
     esp_task_wdt_init(5, true); 
     esp_task_wdt_add(NULL);
 
-    // 2. I2C Setup
+    // I2C Setup
     Wire.setPins(I2C_SDA_PIN, I2C_SCL_PIN);
     Wire.begin();
     Wire.setTimeOut(50);
 
-    // 3. Sensor Init
+    // Sensor Init
     Serial.print("IMU Init... ");
     if (lsm.begin()) {
         lsm.setupAccel(lsm.LSM9DS1_ACCELRANGE_2G);
@@ -151,22 +151,23 @@ void setup() {
 }
 
 void loop() {
-    esp_task_wdt_reset(); // Feed the dog
+    esp_task_wdt_reset(); // Watchdog setup
 
-    // 1. Heartbeat
+    // Heartbeat
     if (millis() - lastHeartbeat >= 500) {
         lastHeartbeat = millis();
         ledState = !ledState;
         digitalWrite(LED_PIN, ledState);
     }
 
-    // 2. Run Recovery Medic
+    // Recovery if needed
     attemptModuleRecovery();
 
-    // 3. Process IMU
+    // Process IMU
     if (imuFound) {
         sensors_event_t a, m, g, t;
         if (lsm.getEvent(&a, &m, &g, &t)) {
+            cal.calibrate(a); cal.calibrate(m); cal.calibrate(g); //added new
             filter.update(g.gyro.x * SENSORS_RADS_TO_DPS, g.gyro.y * SENSORS_RADS_TO_DPS, g.gyro.z * SENSORS_RADS_TO_DPS,
                           a.acceleration.x, a.acceleration.y, a.acceleration.z,
                           m.magnetic.x, m.magnetic.y, m.magnetic.z);
@@ -176,14 +177,14 @@ void loop() {
         }
     }
 
-    // 4. Process GPS
+    // Process GPS
     while (SerialGPS.available() > 0) {
         if (gps.encode(SerialGPS.read())) {
             gpsFound = true;
         }
     }
 
-    // 5. Send Data
+    // Send Data
     if (millis() - lastSendTime >= sendInterval) {
         lastSendTime = millis();
 

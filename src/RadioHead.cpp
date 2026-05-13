@@ -24,7 +24,7 @@ void setup() {
   Serial2.begin(RADIO_BAUD, SERIAL_8N1, RXD2, TXD2);
 
   // 3. CAN Bus Setup (Keep original pins 33, 25)
-  CAN.setPins(33, 25);
+  CAN.setPins(25,26);
   if (!CAN.begin(500E3)) {
     Serial.println("Starting CAN failed!");
     while (1);
